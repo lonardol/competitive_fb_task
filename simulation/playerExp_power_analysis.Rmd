@@ -1,0 +1,270 @@
+---
+title: "Player experiment - Power analysis - binomial GLMM "
+author: "Christoph Völter"
+date: "27/01/2021"
+output: 
+  html_document:
+    theme: united
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(tidyverse)
+library(cowplot)
+library("gghalves")
+library(ggthemes)
+
+load("com_fb_task_power_waitresp2_sim_1000it.RData")
+```
+
+## Generate data
+
+
+
+```{r echo=FALSE, include=FALSE}
+set.seed(1)
+n.subject <- 40 # number subjects
+n.per.subject <- 24 # observations per subject
+n.per.condition <- 4 # observations per subject and condition
+n.blocks <- 4
+subj.id <- as.factor(paste("subj", str_pad(1:n.subject, 2, pad = "0"), sep = "."))
+
+order_possibilities<-as.factor(c("train-fb-train-train-tb-train", "train-fb-train-train-tb-train", "train-tb-train-train-fb-train", "train-tb-train-train-fb-train"))
+baited_bucket <- as.factor(c("go-wait-wait-go-wait-go", "wait-go-go-wait-go-wait", "go-go-wait-go-wait-wait", "wait-wait-go-wait-go-go"))
+
+block_order <- as.vector(replicate(n.subject, sample(x =order_possibilities, size = 4, replace = F)))
+baited_bucket_order <- as.vector(replicate(n.subject, sample(x =baited_bucket, size = 4, replace = F)))
+
+start.data <- data.frame(subj.id)
+# duplicate rows according to the number obs. per subject:
+start.data <- start.data[rep(x = 1:nrow(start.data), times = n.per.subject), ]
+start.data <- as.data.frame(start.data)
+names(start.data) <- "subj.id"
+
+# add condition and trial number
+start.data <- data.frame(expand.grid(subj.id = subj.id, phase = c("test_phase"), block = c(1:n.per.condition)))%>%
+  arrange(subj.id, block)
+
+#start.data$block<-rep((c(rep(1, 6), rep(2, 6), rep(3, 6), rep(4, 6))), n.subject)
+start.data$block_order <- block_order
+start.data$baited_bucket_order <- baited_bucket_order
+
+xdata<- start.data%>%
+  select(-baited_bucket_order)%>%
+  separate(block_order, c("1", "2", "3", "4","5","6"), sep = "-")%>%
+  pivot_longer(cols="1":"6", names_to = "trial", values_to = "condition")
+
+ydata<- start.data%>%
+  select(-block_order)%>%
+  separate(baited_bucket_order, c("1", "2", "3", "4","5","6"), sep = "-")%>%
+  pivot_longer(cols="1":"6", names_to = "trial", values_to = "side")%>%
+  full_join(xdata)
+
+```
+
+
+```{r}
+table(ydata$trial, ydata$condition)
+table(ydata$side, ydata$condition)
+
+test.data<-ydata%>%
+  filter(condition!="train")%>%
+  mutate(z.block=scale(block))
+test.data$condition.dummy <- as.numeric(as.factor(test.data$condition  == levels(as.factor(test.data$condition)[2])))
+
+test.data$condition.c <- as.numeric(as.factor(test.data$condition)) - mean(as.numeric(as.factor(test.data$condition)))
+
+fb.per<-c(0.4, 0.5, 0.6)
+tb.per<-c(0.1, 0.2, 0.3)
+
+library(summarytools)
+view(dfSummary(test.data))
+```
+
+
+
+## Simulation
+
+```{r eval=FALSE, include=FALSE}
+n.simus <- 1000 # small number for testing
+r.effects <- c(0.40) # random effects to be simulated
+# with the intercept being 0.4054651 (qlogis(0.4)) we assume a moderately large random intercept of 1.386294.
+
+r.slope.tb <- c(1.8)
+# with the estimate being -1.791759 (qlogis(0.4)-qlogis(0.1)) we assume a moderately large random slope of 2.233592.
+
+r.slope.block <- 0.2
+
+# create object to store the simulation parameters and results:
+all.res <- data.frame(expand.grid(
+  n.per.subject = n.per.subject, r.effect = r.effects,
+  r.slope.tb = r.slope.tb, r.slope.block = r.slope.block,
+  fb.per = fb.per,
+  tb.per = tb.per,
+  simu = 1:n.simus
+))
+all.res$icpt <- NA
+all.res$conditiontb <- NA
+all.res$re.sd <- NA
+all.res$warns.full <- NA
+all.res$warns.null <- NA
+all.res$lrt.p.con <- NA
+#all.res$lrt.p.age <- NA
+all.res$full.null.p <- NA
+
+all.ests <- matrix(NA, nrow = n.simus, ncol = 1)
+colnames(all.ests) <- c("lrt.p.con")
+
+# create data frame with design:
+## done above
+
+# load packages needed:
+library(lme4)
+# Loading required package: Matrix
+library(kyotil) # we want to store info about convergence issues
+
+# define control structure to make convergence more likely:
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1000000))
+
+xdata <- test.data
+
+# run simulation
+for (i in 1:nrow(all.res)) {
+  set.seed(i) # allows to later replicate individual simulations
+
+
+  m.mat <- model.matrix(object = ~ condition + z.block, data = xdata) # create model martix
+
+  coefs <- c(
+    "(Intercept)" = qlogis(all.res[i, "fb.per"]),
+    "conditiontb" = log(all.res[i, "tb.per"] / (1 - all.res[i, "tb.per"])) - log(all.res[i, "fb.per"] / (1 - all.res[i, "fb.per"])),
+    "z.block" = 0
+  )
+
+  LP <- m.mat[, names(coefs)] %*% coefs # LP wrt fixed effects
+
+  # add random effect to linear predictor:
+  LP <- LP + rnorm(n = n.subject, sd = all.res[i, "r.effect"])[as.numeric(xdata$subj.id)] +
+    rnorm(n = n.subject, sd = all.res[i, "r.slope.tb"])[as.numeric(xdata$subj.id)] * xdata$condition.dummy +
+    rnorm(n = n.subject, sd = all.res[i, "r.slope.block"])[as.numeric(xdata$subj.id)] * xdata$z.block 
+
+  # generate response:
+  xdata$correct <- rbinom(n = nrow(xdata), size = 1, prob = exp(LP) / (1 + exp(LP)))
+
+
+  # fit full model:
+  full <- keepWarnings(glmer(correct ~ condition+ z.block + (1 + condition.c + z.block | subj.id),
+    data = xdata, family = binomial, control = contr
+  ))
+
+  # store results:
+  all.res[i, c("icpt", "conditiontb", "z.block")] <- fixef(full$value)
+  all.res[i, "re.sd"] <- as.data.frame(summary(full$value)$varcor)[1, "sdcor"]
+  all.res[i, "warns.full"] <- nchar(paste(full$warnings, collapse = ""))
+  all.res[i, "lrt.p.con"] <- as.data.frame(drop1(full$value, test = "Chisq"))["condition", "Pr(Chi)"]
+    all.res[i, "lrt.block.p"] <- as.data.frame(drop1(full$value, test = "Chisq"))["z.block", "Pr(Chi)"]
+    print(i)
+}
+
+save.image("com_fb_task_power_waitresp2_sim_1000it.RData")
+```
+
+## Evaluation of results 
+
+* number of warning per combinations of random effects (out of 1000 models per cell)  
+Full model:  
+```{r echo=FALSE}
+#full model
+tapply(X=all.res[, "warns.full"]>0, INDEX=all.res[, c("r.slope.tb", "r.effect")],
+FUN=sum)
+#warning codes: 
+#363: unable to evaluate scaled gradient. Model failed to converge: degenerate  Hessian with 1 negative eigenvalues
+#205: Model is nearly unidentifiable: large eigenvalue ratio - Rescale variables?
+```
+
+
+## Only models that converged are evaluated from here on:  
+
+```{r include=FALSE}
+all.res2=subset(all.res, warns.full==0)
+```
+
+
+### How many models converged, have a significant full-null model comparison, and a significant LRT of condition?  
+```{r echo=FALSE}
+n.converged<- all.res2%>%
+    group_by(tb.per,r.effect, r.slope.tb ) %>%
+  summarise(n.converged=length(lrt.p.con))
+
+
+lrt.data2 <- all.res2 %>%
+  #filter(full.null.p<0.05)%>%
+  group_by(tb.per, fb.per, r.effect, r.slope.tb ) %>%
+  summarise(lrt.p.con.median = median(lrt.p.con), 
+            lrt.p.block.median = median(lrt.block.p),
+            n.sign.lrt.con = length(lrt.p.con[lrt.p.con < 0.05]),
+            n.sign.lrt.block = length(lrt.block.p[lrt.block.p < 0.05]),
+            n.lrt = n.simus,
+            proportion.sign.lrt.con = length(lrt.p.con[lrt.p.con < 0.05]) / n.simus,
+            proportion.sign.lrt.block = length(lrt.block.p[lrt.block.p < 0.05]) / n.simus)%>%
+  full_join(n.converged)
+
+lrt.data2
+```
+
+#### Plotting the proportion of significant LRTs for the predictor variable condition ONLY based on models that converged and with a significant full-null model comparison
+
+```{r echo=FALSE}
+p.con.power <- ggplot(data = lrt.data2, aes(x= as.factor(tb.per),y = proportion.sign.lrt.con, fill=as.factor(fb.per))) +
+  geom_bar(stat="identity", color="black", position=position_dodge())+
+  scale_y_continuous(breaks=seq(0,1,0.2), limits=c(0, 1))+
+  geom_hline(yintercept = 0.8, colour = "black", lwd = 1.1, lty = 2) +
+   # geom_hline(yintercept = 0.05, colour = "darkgrey", lwd = 1.1, lty = 4) +
+  scale_fill_manual(values=c("dodgerblue", "darkorange", "darkgrey"))+
+  labs(fill = "FB condition", y="Power", x= "Ignorance condition") +
+  theme_few()#+
+  #theme(legend.position="none")
+p.con.power
+
+ggsave(p.con.power, filename = "comp_fb_power_40sub_waiting2.png", scale = 0.7, height = 5, width = 8)
+```
+
+
+#### Plotting the fixed effect of condition
+
+```{r echo=FALSE}
+p.con <- ggplot(data = all.res2, aes(x= as.factor(test.per), fill=as.factor(control.per)))  +
+  geom_jitter(data = all.res2, aes(x = as.factor(test.per), y = conditiontest, color = as.factor(control.per)), size = 1.5, position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.5), alpha = .1) +
+  scale_color_manual(values = c("dodgerblue", "darkorange")) +#, name = "control condition"
+  scale_fill_manual(values = c("dodgerblue", "darkorange")) +#, name = "control condition"
+    geom_boxplot(data = all.res2 %>% filter(control.per == "0.2"), aes(x = as.factor(test.per), y = conditiontest), position = position_nudge(x = -.2), width = 0.3, alpha = 0.5, outlier.colour = "white") +
+  geom_boxplot(data = all.res2 %>% filter(control.per == "0.3"), aes(x = as.factor(test.per), y = conditiontest), position = position_nudge(x = .2), width = 0.3, alpha = 0.5, outlier.colour = "white") +
+  #geom_hline(data = data.frame(test.per = "0.7"), aes(yintercept = coefs["conditiontest"]), colour = "black", lwd = 1.1, lty = 2, alpha = 0.7) +
+  geom_segment( aes(x=2, xend=2.4, y = qlogis(0.7) - qlogis(0.3), yend = qlogis(0.7) - qlogis(0.3)), colour = "red", lwd = 1, lty = 4, alpha = 0.7) +
+    geom_segment( aes(x=1.6, xend=2, y = qlogis(0.7) - qlogis(0.2), yend = qlogis(0.7) - qlogis(0.2)), colour = "red", lwd = 1, lty = 2, alpha = 0.7) +
+    geom_segment( aes(x=0.6, xend=1, y = qlogis(0.6) - qlogis(0.2), yend = qlogis(0.6) - qlogis(0.2) ), colour = "red", lwd = 1, lty = 2, alpha = 0.7) +
+    geom_segment( aes(x=1, xend=1.4, y = qlogis(0.6) - qlogis(0.3), yend = qlogis(0.6) - qlogis(0.3) ), colour = "red", lwd = 1, lty = 4, alpha = 0.7) +
+  ylab("Condition (fixed effect)") +
+  xlab("Test condition") +
+  theme_few() +
+  #theme(legend.title = element_blank())+
+  theme(legend.position = "none")
+
+p.con
+```
+
+```{r}
+
+pg<-plot_grid(p.con, p.con.power, nrow=1, labels=c("A", "B"))
+ggsave(pg, filename = "graphs/simulation_estimates_power.png", width=10, height=5, scale=0.7)
+```
+
+```{r}
+save.image("multiple_possibilities_multiple_possibilities_1000it_6dogs.RData")
+```
+
+

@@ -1,0 +1,88 @@
+---
+title: "Competitive FB task - Power analysis - binomial GLMM "
+author: "Christoph Völter"
+date: "27/01/2021"
+output: 
+  html_document:
+    theme: united
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(tidyverse)
+library(cowplot)
+library("gghalves")
+library(ggthemes)
+
+#load(".RData")
+```
+
+## Generate data
+
+
+
+```{r echo=FALSE, include=FALSE}
+set.seed(1)
+n.subject <- 40 # number subjects
+n.per.subject <- 24 # observations per subject
+n.per.condition <- 24 # observations per subject and condition
+n.blocks <- 4
+subj.id <- as.factor(paste("subj", str_pad(1:n.subject, 2, pad = "0"), sep = "."))
+
+order_possibilities<-as.factor(c("S-D-E", "S-E-D", "D-S-E", "D-E-S", "E-S-D", "E-D-S"))
+first_hiden_food_possibilities <- as.factor(c("Sausage_first", "Dry_food_first"))
+
+locations <- as.vector(replicate(n.subject * n.blocks, sample(x =order_possibilities, size = 6, replace = F)))
+
+first_food<-  as.vector(replicate(n.subject * (n.per.subject/2), sample(x =first_hiden_food_possibilities, size = 2, replace = F)))
+
+start.data <- data.frame(subj.id)
+# duplicate rows according to the number obs. per subject:
+start.data <- start.data[rep(x = 1:nrow(start.data), times = n.per.subject), ]
+start.data <- as.data.frame(start.data)
+names(start.data) <- "subj.id"
+
+# add condition and trial number
+start.data <- data.frame(expand.grid(subj.id = subj.id, condition = c("preference_test"), trial = c(1:n.per.condition)))%>%
+  arrange(subj.id, trial)
+
+start.data$block<-rep((c(rep(1, 6), rep(2, 6), rep(3, 6), rep(4, 6))), n.subject)
+start.data$first_food_hidden <- first_food
+start.data$locations <- locations
+
+start.data<- start.data%>%
+  mutate(loc=locations)%>%
+  separate(loc, c("left", "middle", "right"), sep = "-")
+
+
+```
+
+
+```{r}
+xx <- table(start.data$trial, start.data$locations)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$subj.id, start.data$locations)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$trial, start.data$first_food_hidden)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$subj.id, start.data$first_food_hidden)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$locations, start.data$first_food_hidden)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+library(summarytools)
+view(dfSummary(start.data))
+```
+
+```{r}
+write.csv(start.data, file = "counterbalancing_compFB_pilot.csv")
+```
+

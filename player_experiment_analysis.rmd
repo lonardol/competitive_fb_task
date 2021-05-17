@@ -1,0 +1,17 @@
+---
+title: "player_experiment_analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lme4)
+```
+
+Load data
+```{r}
+xdata <- read.csv(file = "data/20210517_Results_player_experiment - Test trials.csv")
+
+```
+
