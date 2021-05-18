@@ -7,11 +7,89 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(lme4)
+library(summarytools)
 ```
 
 Load data
 ```{r}
-xdata <- read.csv(file = "data/20210517_Results_player_experiment - Test trials.csv")
+xdata <- read.csv(file = "data/20210517_Results_player_experiment - Test trials.csv")%>%
+  mutate(sex=fct_recode(as.factor(sex), "F"="L"))%>%
+  filter(response_SM!="")
 
+view(dfSummary(xdata))
+```
+
+```{r}
+model.data<-xdata%>%
+  filter(condition=="false_belief" | condition=="true_belief", age_months>0)%>%
+  mutate(wait=ifelse(response_SM=="move", 0, ifelse(response_SM=="stay", 1, NA)))%>%
+  droplevels()
+
+
+model.data$z.block<-scale(model.data$block, center = TRUE, scale=TRUE)
+model.data$z.age<-scale(model.data$age, center = TRUE, scale=TRUE)
+model.data$condition<- as.factor(model.data$condition)
+model.data$condition.c<- as.numeric(model.data$condition)-mean(as.numeric(model.data$condition))
+model.data$sex<- as.factor(model.data$sex)
+view(dfSummary(model.data)) 
+
+
+hist(model.data$wait)
+
+
+```
+
+
+
+
+GLMM
+```{r}
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1000000))
+
+mm1 <- glmer(wait ~ condition*z.block +sex + z.age +(1 + condition.c * z.block | subject_ID),
+    data = model.data, family = binomial, control = contr
+  )
+```
+```{r}
+drop1(mm1, test="Chisq")
+```
+```{r}
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1000000))
+
+mm2 <- glmer(wait ~ condition+z.block +sex + z.age +(1 + condition.c + z.block | subject_ID),
+    data = model.data, family = binomial, control = contr
+  )
+summary(mm2)
+```
+```{r}
+drop1(mm2, test="Chisq")
+```
+
+Visualise condition effect
+```{r}
+model.data.agg<-model.data%>%
+  group_by(condition, subject_ID)%>%
+  summarise(mean_wait=mean(wait))%>%
+  add_count(mean_wait)
+
+
+ggplot(data=model.data.agg, aes(x=condition, y=mean_wait))+
+  geom_boxplot(outlier.colour="white")+
+  geom_point(size=model.data.agg$n, alpha=0.1)+
+  theme_classic()
+```
+
+Visualise block effect
+```{r}
+model.data.agg<-model.data%>%
+  group_by(block, subject_ID)%>%
+  summarise(mean_wait=mean(wait))%>%
+  add_count(mean_wait)
+
+
+ggplot(data=model.data.agg, aes(x=as.factor(block), y=mean_wait))+
+  geom_boxplot(outlier.colour="white")+
+  geom_point(size=model.data.agg$n, alpha=0.1)+
+  theme_classic()
 ```
 
