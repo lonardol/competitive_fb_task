@@ -15,6 +15,7 @@ source("./functions/boot_glmm2.r")
 source("./functions/glmmTMB_stability.r")
 source("./functions/drop1_para_glmmtmb.r")
 
+load("player_exp_analysis_workspace.RData")
 ```
 
 Load data
@@ -92,10 +93,10 @@ m.stab.plot(round(mm2.stab$summary[, -1], 3))
 --> model stable with regard to the fixed effects
 
 ```{r}
-boot.full=boot.glmm.pred(model.res=mm2, excl.warnings=F,
+boot.mm2=boot.glmm.pred(model.res=mm2, excl.warnings=F,
 nboots=1000, para=T, n.cores=3, resol=1000, level=0.95)
 
-mm2_boot_ci<-boot.full$ci.estimates
+mm2_boot_ci<-boot.mm2$ci.estimates
 ```
 
 
@@ -183,12 +184,25 @@ m.stab.plot(round(mm4.stab$summary[, -1], 3))
 --> model stable with regard to the fixed effects
 
 ```{r}
-boot.full.mm4=boot.glmm.pred(model.res=mm4.ign, excl.warnings=F,
+boot.mm4=boot.glmm.pred(model.res=mm4.ign, excl.warnings=F,
 nboots=1000, para=T, n.cores=3, resol=1000, level=0.95)
 
-mm4_boot_ci<-boot.full.mm4$ci.estimates
+mm4_boot_ci<-boot.mm4$ci.estimates
 ```
 
+```{r}
+
+model_table.mm4 <- bind_cols(as.data.frame(summary(mm4.ign)$coefficients),
+                         drop1_mm4,
+                         mm4_boot_ci) %>% 
+  select(Estimate, SE = `Std. Error`, LowerCI = X2.5., UpperCI = X97.5., Chi2 = LRT, df = npar, p = `Pr(Chi)`) %>%
+  mutate(across(.cols = c(p), ~ round(.x, 3))) %>% 
+  mutate(across(.cols = c(Estimate:Chi2), ~ round(.x, 2))) %>% 
+  mutate(across(Chi2:p, ~replace_na(.x, "")))%>%
+mutate(p=replace(p, p==0, "<0.001"))
+
+write.csv(model_table.mm4, file = "mm4_fb_ignorant_output.csv")
+```
 
 Visualise condition effect
 ```{r}
@@ -321,10 +335,10 @@ ci.mm6=confint.merMod(mm6.latency)
 ci.mm6<-tail(as.data.frame(ci.mm6),5)
   
 
-#boot.full.mm4=boot.glmm.pred(model.res=mm4.ign, excl.warnings=F,
-#nboots=1000, para=T, n.cores=3, resol=1000, level=0.95)
+boot.mm6=boot.glmm.pred(model.res=mm6.latency, excl.warnings=F,
+nboots=1000, para=T, n.cores=3, resol=1000, level=0.95)
 
-#mm4_boot_ci<-boot.full.mm4$ci.estimates
+mm6_latency_boot_ci<-boot.mm6$ci.estimates
 ```
 ### output table
 
@@ -332,8 +346,8 @@ ci.mm6<-tail(as.data.frame(ci.mm6),5)
 
 model_table.latency <- bind_cols(as.data.frame(summary(mm6.latency)$coefficients),
                          drop1.mm6,
-                         ci.mm6) %>% 
-  select(Estimate, SE = `Std. Error`, LowerCI = "2.5 %", UpperCI = "97.5 %", Chi2 = LRT, df = npar, p = `Pr(Chi)`) %>%
+                         mm6_latency_boot_ci) %>% 
+  select(Estimate, SE = `Std. Error`, LowerCI = X2.5., UpperCI = X97.5., Chi2 = LRT, df = npar, p = `Pr(Chi)`) %>%
   mutate(across(.cols = c(p), ~ round(.x, 3))) %>% 
   mutate(across(.cols = c(Estimate:Chi2), ~ round(.x, 2))) %>% 
   mutate(across(Chi2:p, ~replace_na(.x, "")))%>%
@@ -388,3 +402,9 @@ pg2
 ggsave(pg2, filename = "graphs/player_exp_latency.png", width=12, height=8, scale=0.48)
 
 ```
+
+
+```{r eval=FALSE}
+save.image(file="player_exp_analysis_workspace.RData")
+```
+
